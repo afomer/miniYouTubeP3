@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
-#include "logging.h"
+//#include "logging.h"
 
 #define CRLF "\r\n"
 #define HT '\t'
@@ -48,6 +48,8 @@ typedef struct {
         int outgoing_port;
         int is_web_server;
         int serving_clientfd;
+        int timestamp;
+        float t_curr;
 
 } client;
 
@@ -71,7 +73,6 @@ int SHOW_LOG = 1;
 
 int handle_request_header(client *client, int readret, char *www_folder_path, char *log_file);
 void app_serve(client *client, char *www_folder_path);
-int handle_GET(client *client, char* www_folder_path);
 int handle_HEAD(client *client, char *www_folder_path);
 char *get_content_type(char *uri, char *buff);
 int handle_POST(client *client, char *www_folder_path);
@@ -95,6 +96,7 @@ char *get_server_date();
 char* get_str_from_int(int number, char *buffer);
 int get_int_from_str(char *string);
 int is_string_equal(char *string_1, char *string_2);
+void handle_path(client *client, char *new_request_line);
 
 /****/
 
@@ -209,7 +211,7 @@ int supported_method(char *method_name) {
         if ( is_string_equal(method_name, GET)  || is_string_equal(method_name, "ET") ||
              is_string_equal(method_name, HEAD) || is_string_equal(method_name, "EAD")||
              is_string_equal(method_name, POST) || is_string_equal(method_name, "OST") ) {
-                logger(LOG_FILE, "\nis_request_line method=[%s]\n", method_name, SHOW_LOG);
+               // logger(LOG_FILE, "\nis_request_line method=[%s]\n", method_name, SHOW_LOG);
                 return 1;
         }
         return 0;
@@ -357,44 +359,44 @@ void send_response(client *client, int status_code, char *extra_message_info, in
                 strcat(status_line, "200 OK\r\n");
 
                 get_main_headers(client, &respond_buffer, status_line, extra_message_info, extra_message_info_size);
-                logger(LOG_FILE, "%s", "\n------- 200 RESPONSE-------\n", SHOW_LOG);
-                logger(LOG_FILE, "\nstatus_line: %s \n", status_line, SHOW_LOG);
-                logger(LOG_FILE, "%s", "\n---------\n", SHOW_LOG);
+                //logger(LOG_FILE, "%s", "\n------- 200 RESPONSE-------\n", SHOW_LOG);
+                //logger(LOG_FILE, "\nstatus_line: %s \n", status_line, SHOW_LOG);
+                //logger(LOG_FILE, "%s", "\n---------\n", SHOW_LOG);
                 send_response_helper(client, &respond_buffer);
                 break;
 
         case 400: // Bad Request
                 strcpy(status_line, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n");
                 get_main_headers(client, &respond_buffer, status_line, NULL, 0);
-                logger(LOG_FILE, "\n------- 400 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
+                //logger(LOG_FILE, "\n------- 400 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
                 send_response_helper(client, &respond_buffer);
                 break;
 
         case 404: // Not Found
                 strcpy(status_line, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n");
                 get_main_headers(client, &respond_buffer, status_line, NULL, 0);
-                logger(LOG_FILE, "\n-------404 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
+                //logger(LOG_FILE, "\n-------404 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
                 send_response_helper(client, &respond_buffer);
                 break;
 
         case 501: // Not Implemented
                 strcpy(status_line, "HTTP/1.1 501 Not Implemented\r\nContent-Length: 0\r\n");
                 get_main_headers(client, &respond_buffer, status_line, NULL, 0);
-                logger(LOG_FILE, "\n-------501 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
+                //logger(LOG_FILE, "\n-------501 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
                 send_response_helper(client, &respond_buffer);
                 break;
 
         case 500: // Not Implemented
                 strcpy(status_line, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n");
                 get_main_headers(client, &respond_buffer, status_line, NULL, 0);
-                logger(LOG_FILE, "\n-------500 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
+                //logger(LOG_FILE, "\n-------500 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
                 send_response_helper(client, &respond_buffer);
                 break;
 
         case 413:
                 strcpy(status_line, "HTTP/1.1 413 413 Payload Too Large\r\nContent-Length: 0\r\n");
                 get_main_headers(client, &respond_buffer, status_line, NULL, 0);
-                logger(LOG_FILE, "\n-------413 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
+                //logger(LOG_FILE, "\n-------413 RESPONSE-------\n%s---------\n", respond_buffer.buffer, SHOW_LOG);
                 send_response_helper(client, &respond_buffer);
                 break;
 
@@ -481,7 +483,7 @@ int handle_message_header(client *client, char *string) {
  * DNS_resolve:
  * resolve the uri_buff aganist the DNS
  */
-char *DNS_resolve(char host) {
+char *DNS_resolve(char *host) {
 	return host;
 }
 
@@ -494,6 +496,8 @@ int set_request_line(client *client, char *string, char *new_request_line) {
         char string_uri[MAX_LINE];
         char number1[2];
         char number2[2];
+        char *begin;
+        char *end;
 
         sscanf(string, "%s %s HTTP/%1s.%1s\r\n", string_method_name, string_uri, number1, number2);
         
@@ -509,7 +513,7 @@ int set_request_line(client *client, char *string, char *new_request_line) {
         if (begin == NULL) {
         	return -1;
         }
-        begin = begin + 2 // start the host
+        begin = begin + 2; // start the host
 
         end   = strrchr(begin, '/');
 
@@ -519,8 +523,8 @@ int set_request_line(client *client, char *string, char *new_request_line) {
 
         /* get the main host name based on the format of the URI */
         char uri_buff[MAX_LINE];
-		char *port_ptr = strchr(begin, ':')
-        char *str_len;
+		char *port_ptr = strchr(begin, ':');
+        int str_len;
         
         // format #1: http://....:port/...
         if ( port_ptr != NULL && port_ptr < end ) {
@@ -541,13 +545,13 @@ int set_request_line(client *client, char *string, char *new_request_line) {
 		// resolve the uri_buff aganist the DNS
 		// keep the rest the same
 		char *new_host = DNS_resolve(uri_buff);
-		char *path = end
-		sscanf(client->uri, "http://%s%s", new_host, path);
-        sscanf(new_request_line, "%s %s HTTP/%1s.%1s\r\n", string_method_name, client->uri, number1, number2);
+		char *path = end;
+		sprintf(client->uri, "http://%s%s", new_host, path);
+        sprintf(new_request_line, "%s %s HTTP/%1s.%1s\r\n", string_method_name, client->uri, number1, number2);
         handle_path(client, new_request_line);
 
         // set the new uri
-        sscanf(new_request_line, "%s %s HTTP/%1s.%1s\r\n", string_method_name, client->uri, number1, number2);
+        sprintf(new_request_line, "%s %s HTTP/%1s.%1s\r\n", string_method_name, client->uri, number1, number2);
         return 1;
 }
 
@@ -629,13 +633,12 @@ FILE *get_path(client *client, char *www_folder_path) {
  * get_IP_from_hostname:
  * resolve the hostname against a DNS to get the IP
  */
-char *get_IP_from_hostname(client *client){
+char *get_IP_from_hostname(client *client, char *www_folder_path){
         // try to open the file provided by the URI
-        FILE *fp;
         char *uri = client->uri;
-        char uri_buffer[MAX_LINE];
+       // char uri_buffer[MAX_LINE];
         
-        /* currently I serve from one server */
+        /* currently I will serve from one harcoded server */
         // TODO: get the ip of the "best" video web server
 
         return uri;
@@ -779,82 +782,6 @@ int handle_HEAD(client *client, char *www_folder_path) {
 }
 
 /*
- * handle_GET: handle GET requests by resolving the hostname with the DNS
- * server
- */
-int handle_GET(client *client, char* www_folder_path) {
-
-        int file_len;
-        char *uri;
-        FILE *fp;
-        uri = get_IP_from_hostname(client, www_folder_path);
-        uri = client->uri;
-        logger(LOG_FILE,"\nGET fp uri: %s\n", uri, SHOW_LOG);
-
-        // Make a buffer of the size of the
-        // file to contain the message body
-        file_len = get_file_size(fp);
-        char num_buff[20];
-        get_str_from_int(file_len, num_buff);
-        char *content_length = num_buff;
-        // server-side decided
-        char tmp_buff[20];
-        char *content_type   = get_content_type(uri, tmp_buff);
-        get_last_modified(client, uri);
-        char *last_modified = client->headers[LAST_MODIFIED_INDEX];
-        char *reading_buffer = malloc( sizeof(char) * (file_len + 1) );
-        fread(reading_buffer, sizeof(char), file_len, fp);
-
-        /* writing message-body */
-        /*
-           Carry a seek to know where to start writing
-           while appending to "extra_message_info"
-         */
-        char *message_body = reading_buffer;
-        int message_len = sizeof(char) * (BUF_SIZE + strlen(CRLF) * 5 + strlen("Content-Length: ") + strlen("Content-Type: ")+ strlen("Last-Modified: "));
-        char *extra_message_info = malloc(sizeof(char) * (message_len + file_len + BUF_SIZE)); // for '\0' each part
-        int seek = 0;
-        memcpy(extra_message_info + seek, "Content-Length: ", strlen("Content-Length: "));
-        seek += strlen("Content-Length: ");
-
-        memcpy(extra_message_info + seek, content_length, strlen(content_length));
-        seek += strlen(content_length);
-
-
-        memcpy(extra_message_info + seek, CRLF, strlen(CRLF));
-        seek += strlen(CRLF);
-
-        memcpy(extra_message_info + seek, "Content-Type: ", strlen("Content-Type: "));
-        seek += strlen("Content-Type: ");
-
-        memcpy(extra_message_info + seek, content_type, strlen(content_type));
-        seek += strlen(content_type);
-
-        memcpy(extra_message_info + seek, CRLF, strlen(CRLF));
-        seek += strlen(CRLF);
-
-        memcpy(extra_message_info + seek, "Last-Modified: ", strlen("Last-Modified: "));
-        seek += strlen("Last-Modified: ");
-
-        memcpy(extra_message_info + seek, last_modified, strlen(last_modified));
-        seek += strlen(last_modified);
-
-        memcpy(extra_message_info + seek, CRLF, strlen(CRLF));
-        seek += strlen(CRLF);
-
-        memcpy(extra_message_info + seek, message_body, file_len);
-        seek += file_len;
-
-        send_response(client, 200, extra_message_info, seek);
-
-        fclose(fp);
-        free(reading_buffer);
-        free(extra_message_info);
-
-        return 0;
-}
-
-/*
  * app_serve: check the request type and,
  * respond to it according to the request method.
  * The request format:
@@ -871,7 +798,7 @@ void app_serve(client *client, char *www_folder_path) {
 
         // Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
         if ( is_string_equal(client->request_method, GET) || is_string_equal(client->request_method, "ET") ) {
-                handle_GET(client, www_folder_path);
+            //    handle_GET(client, www_folder_path);
         }
         else if ( is_string_equal(client->request_method, HEAD) || is_string_equal(client->request_method, "EAD") ) {
                 handle_HEAD(client, www_folder_path);
@@ -897,14 +824,33 @@ void get_bit_rates(client *client, char *buf) {
 	// look for bitrates and add them to
 	// the bitrate array
 	char *bitrate_begin = strstr(buf, "bitrate");
+	char *bitrate_end 	= NULL;
 	while( bitrate_begin != NULL ) {
-		bitrate_begin = bitrate_begin + strlen("bitrate") + strlen("=\"");
-		bitrate_end   = strchr(bitrate_begin, '"');
-		*bitrate_end  = '\0';
-		int bitrate_value = atoi(bitrate);
-		set_bit_rate(client, bitrate_value);
+			bitrate_begin = bitrate_begin + strlen("bitrate") + strlen("=\"");
+			bitrate_end   = strchr(bitrate_begin, '"');
+			int bitrate_value = atoi(bitrate_begin);
+			set_bit_rate(client, bitrate_value);
+			bitrate_begin = strstr(bitrate_end, "bitrate");
 	}
 }
+/*
+* get_best_bitrate: 
+* pick best bitrate according to t_curr 1.5x crit.
+*/
+int get_best_bitrate(client *client) {
+	int supported_throughput = client->t_curr;
+	int best_bitrate = client->bitrates[0];
+	int i;
+	for (i = 0; i < BITRATES_NUM; i++){
+		// 2.5 * bitrate = bitrate 1.5x
+		if (client->bitrates[i] < 0 || supported_throughput < (int)(client->bitrates[i] * 2.5)) {
+			break;
+		}
+		best_bitrate = client->bitrates[i];
+	}
+	return best_bitrate;
+}
+
 
 /*
  * handle_path: if the path is request .f4m get the bitrates from the webserver
@@ -912,32 +858,55 @@ void get_bit_rates(client *client, char *buf) {
  */
 void handle_path(client *client, char *new_request_line) {
 
+	// store timestamp for bitrate adaptation
+	client->timestamp = (int)time(NULL);
+
 	char *extn = strrchr(client->uri, '.');
 	if (extn != NULL && strcmp(extn, ".f4m") == 0) {
 		// Perform the current request and store the bitrates
 		// then modify the uri path so it requests "_nolist.f4m"
-		static response *respond_buffer;
+		static response respond_buffer;
 		respond_buffer.size   = strlen(new_request_line);
 		respond_buffer.buffer = new_request_line;
-		send_response_helper(client, respond_buffer);
+		send_response_helper(client, &respond_buffer);
 		
 		char buf[BUF_SIZE];
 
 		// put all responses in the buffer readret = 0
 		int seek = 0;
+		int bytes_to_be_read = BUF_SIZE;
 		int readret = 1;
 		while(readret > 0) {
 			readret = recv(client->clientfd, buf + seek, bytes_to_be_read, 0);
-			seek += readret
+			seek += readret;
 		}
 		
 		get_bit_rates(client, buf);
 		int nolist_str_len = extn - (client->uri);
 		char nolist_str[MAX_LINE];
 		memcpy(nolist_str, client->uri, nolist_str_len);
-		nolist_str[nolist_str] = '\0';
-		sscanf(client->uri, "%s_nolist.f4m", nolist_str)
+		nolist_str[nolist_str_len] = '\0';
+		sprintf(client->uri, "%s_nolist.f4m", nolist_str);
 	}
+
+	// for the case that you're modifying segment request
+	// get the best bitrate and modify the uri
+	char *path = strrchr(client->uri, '/');
+	char *sub_path = strstr(client->uri, "seg"); //TODO: make sure it's lower case
+	if (path != NULL && sub_path != NULL) {
+		// Perform the current request and store the bitrates
+		// then modify the uri path so it requests "_nolist.f4m"
+		int path1_len = path - (client->uri);
+		int best_supported_bitrate = get_best_bitrate(client);
+
+		char new_uri[MAX_LINE];
+		char new_sub_path[MAX_LINE];
+		memcpy(new_sub_path, sub_path, strlen(sub_path)); // cpy in a buf to prevent overwrites from sprintf
+		memcpy(new_uri, client->uri, path1_len);
+		client->uri[0] = 0;
+		sprintf(client->uri, "%s/%d%s", new_uri, best_supported_bitrate, new_sub_path);
+	}
+
 	return;
 }
 
@@ -963,7 +932,7 @@ int handle_request_header(client *client, int readret, char *www_folder_path, ch
         char line[BUF_SIZE];
         strcpy(tmp_requst_buffer, client->request_buffer);
 
-        int close_socket_after_response = 0;
+      //  int close_socket_after_response = 0;
 
         //logger(LOG_FILE, "Handling Request:\n%s\n", tmp_requst_buffer, SHOW_LOG);
 
@@ -974,9 +943,9 @@ int handle_request_header(client *client, int readret, char *www_folder_path, ch
                              tmp_requst_buffer[readret - 2] == '\r' &&
                              tmp_requst_buffer[readret - 1] == '\n';
 
-        static respond response_buffer;
+        static response response;
         client->sent_empty_line = has_empty_line;
-        char *request_end = &(tmp_requst_buffer[readret - 1]);
+        //char *request_end = &(tmp_requst_buffer[readret - 1]);
         char *begin = tmp_requst_buffer;
         char *end = strstr(tmp_requst_buffer, CRLF);
 		char new_request_line[MAX_LINE];
@@ -993,15 +962,15 @@ int handle_request_header(client *client, int readret, char *www_folder_path, ch
             if ( is_request_line(line) ) {
                     set_request_line(client, line, new_request_line);
                     // send the new request line
-                    response->size = strlen(new_request_line);
-                    response->buffer = new_request_line;
-                    send_response_helper(client, response);
+                    response.size = strlen(new_request_line);
+                    response.buffer = new_request_line;
+                    send_response_helper(client, &response);
             }
             else {
 	            // send to ther user
-                response->size = strlen(line);
-                response->buffer = line;
-                send_response_helper(client, response);    	
+                response.size = strlen(line);
+                response.buffer = line;
+                send_response_helper(client, &response);    	
             }
 
         	begin = end + 2;

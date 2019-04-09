@@ -19,6 +19,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include "parser.h"
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 /** Constants **/
 
@@ -33,6 +35,7 @@
 
 char *LOG_FILE;
 char *FAKE_IP;
+float ALPHA;
 
 /****/
 
@@ -54,7 +57,7 @@ int run_server(int argc, char *argv[]);
 void init_pool(int listenfd, pool * p);
 int create_listening_socket(struct sockaddr_in addr);
 void add_client(int connfd, pool * p, char * log_file);
-void check_clients(pool * p, char * www_folder_path, char * log_file);
+void check_clients(pool * p, char * optional_www_folder_path, char * log_file);
 void remove_client(pool * p, int i);
 int daemonize(char * lock_file);
 void signal_handler(int sig);
@@ -131,9 +134,13 @@ void remove_client(pool * p, int i) {
 
         close_socket(p->clients[i].clientfd);
 
+        int j;
+		for (j = 0; j < BITRATES_NUM; j++) {
+			p->clients[i].bitrates[j] = -1;
+		}
+
         // remove clientfd from pool
         p->clients[i].clientfd = -1;
-        p->clients[i].client_context = NULL;
 
         reset_request_info_buffer( &(p->clients[i]));
 
@@ -143,7 +150,7 @@ void remove_client(pool * p, int i) {
  * check_clients: retrieve data in the reading buffer
  * depnding if its a secure or insecure connection
  */
-void check_clients(pool * p, char * www_folder_path, char * log_file) {
+void check_clients(pool * p, char * optional_www_folder_path, char * log_file) {
 
         int i, readret, connfd;
         char buf[BUF_SIZE];
@@ -172,6 +179,13 @@ void check_clients(pool * p, char * www_folder_path, char * log_file) {
 
 		                        }
 		                        else {
+		                        		// apply bitrate adaptation
+		                        		int new_timestamp = (int)time(NULL);
+		                        		int t_new  = readret/(new_timestamp - (client.timestamp));
+		                        		int t_curr = client.t_curr;
+
+		                        		client.t_curr = ALPHA*t_new +(1 - ALPHA)*t_curr;
+
 	                        			send(client.serving_clientfd, buf, readret, 0);	
                         		}
                         }
@@ -209,7 +223,7 @@ void check_clients(pool * p, char * www_folder_path, char * log_file) {
 		                     //logger(LOG_FILE, "client.request_buffer: %s\n", client.request_buffer, SHOW_LOG);
 
 		                        //int close_socket_after_response = 0 close_socket_after_response =
-		                        handle_request_header(&client, readret, www_folder_path, LOG_FILE);
+		                        handle_request_header(&client, readret, optional_www_folder_path, LOG_FILE);
 		                     //logger(LOG_FILE, "\n request_buffer after handle_request_header:%s\n", client.request_buffer, SHOW_LOG);
 
 		                        // After serving the client, decide whether to close the connection or not.
@@ -228,7 +242,7 @@ void check_clients(pool * p, char * www_folder_path, char * log_file) {
 
 }
 
-TODO: add bitrate field for bitrate adpatation
+//TODO: add bitrate field for bitrate adpatation
 /*
  * add_client: add the connection to the server's
  * clients's table
@@ -238,9 +252,9 @@ void add_client(int connfd, pool * p, char * log_file) {
 
         /* You have in p_clientfd FD_SETSIZE positions,
            find the nearest slot for the new client */
-        int i;
-        client *client = NULL;
-        client *server_client = NULL;
+		int i;
+		client *server_client = NULL;
+		client *client = NULL;
 
         /* main listening socket is ones of the nready.
            So, we decrement 1 to get the right number of clients */
@@ -256,9 +270,9 @@ void add_client(int connfd, pool * p, char * log_file) {
                         /* Add the new client to the active clients pool
                            & its FD to read set */
                         p->clients[i].clientfd = connfd;
-						p->clients[i]->outgoing_port = -1;
-						p->clinets[i]->serving_clientfd = -1;
-						p->clients[i]->is_web_server = 0;
+						p->clients[i].outgoing_port = -1;
+						p->clients[i].serving_clientfd = -1;
+						p->clients[i].is_web_server = 0;
 
                         // Malloc space for headers (maximum chars is MAX_LINE)
                         p->clients[i].bytes_to_be_read[0] = 0;
@@ -279,7 +293,7 @@ void add_client(int connfd, pool * p, char * log_file) {
 
                         // update the max index of the fdset
                         if (connfd > p->maxfd) {
-                                p->maxfd = connfd
+                                p->maxfd = connfd;
                         }
                         if (i > p->maxi) {
                                 p->maxi = i;
@@ -291,13 +305,14 @@ void add_client(int connfd, pool * p, char * log_file) {
 		/* initializing the socket for Apache Web Server connections, 
 			and resolving based on DNS */
 		struct sockaddr_in outgoing_addr;
-		int outgoing_port;
-		struct sockaddr_int actual_addr;
-		int actual_addr_size = sizeof(actual_addr);
+		struct sockaddr_in actual_addr;
+		int outgoing_sock;
+
+		socklen_t actual_addr_size = sizeof(actual_addr);
 		outgoing_addr.sin_family = AF_INET;
 		// 0 tells the OS to pick the port for us
 		outgoing_addr.sin_port = htons(0);
-		outgoing_addr.sin_addr.s_addr = FAKE_IP;
+		outgoing_addr.sin_addr.s_addr = inet_addr(FAKE_IP);
 		outgoing_sock = create_listening_socket(outgoing_addr);
 		getsockname(outgoing_sock, (struct sockaddr*)&actual_addr, &actual_addr_size);
 
@@ -447,10 +462,9 @@ int run_server(int argc, char *argv[]) {
         int sock, client_sock;
         int listen_port;
         int dns_port;
-        float alpha;
         char *log_file;
         char *dns_ip;
-        char *optional_www_ip;
+        char *optional_www_folder_path;
         socklen_t cli_size;
         struct sockaddr_in addr, cli_addr;
         static pool pool;
@@ -470,12 +484,12 @@ int run_server(int argc, char *argv[]) {
 
         LOG_FILE = argv[1]; // set a global variable for the log_file
         log_file = LOG_FILE;
-        alpha = atoi(argv[2]); // for smooth averaging
+        ALPHA = atoi(argv[2]); // for smooth averaging
         listen_port = atoi(argv[3]); // listening for the browser
         FAKE_IP  = argv[4]; // binding for connecting with Web Server
         dns_ip   = argv[5]; // DNS server IP
-        dns_port = argv[6]; // DNS server port
-        optional_www_ip = argv[7]; // if unavialable DNS resolve to video.cs.cmu.edu
+        dns_port = atoi(argv[6]); // DNS server port
+        optional_www_folder_path = argv[7]; // if unavialable DNS resolve to video.cs.cmu.edu
         get_str_from_int(listen_port, listen_port_buff);
         get_str_from_int(dns_port, dns_port_buff);
 
@@ -547,7 +561,7 @@ int run_server(int argc, char *argv[]) {
                 }*/
 
                 /* Check events for connected clients */
-                check_clients(&pool, www_folder_path, log_file);
+                check_clients(&pool, optional_www_folder_path, log_file);
         }
 
 }

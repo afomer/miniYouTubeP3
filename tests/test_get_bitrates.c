@@ -154,17 +154,17 @@ int main(int argc, char const *argv[])
 	printf("[Stored] bitrate_4=%d\n", 1072);
 	printf("[Stored] bitrate_5=%d\n", 1372);
 
-	char *example_uri = "./static/example.f4m";
+	char *example_uri = "/vod/big_buck_bunny.f4m";
 	strcpy(client.uri, example_uri);
 	handle_path(&client, buf);
-	int bitrate_str_mod_test_1 = strcmp(client.uri, "./static/example_nolist.f4m") == 0;
+	int bitrate_str_mod_test_1 = strcmp(client.uri, "/vod/big_buck_bunny_nolist.f4m") == 0;
 	printf("[example_uri=%s] [genereated_uri=%s]\n", example_uri, client.uri);
 
-	char *seq_uri = "/path/to/video/500Seg2-Frag3";
+	char *seq_uri = "/vod/10Seg2-Frag3";
 	strcpy(client.uri, seq_uri);	
 	client.t_curr = 2679;
 	handle_path(&client, example_uri);
-	int bitrate_adapt_test1 = strcmp(client.uri, "/path/to/video/872Seg2-Frag3") == 0;
+	int bitrate_adapt_test1 = strcmp(client.uri, "/vod/10Seg2-Frag3") == 0;
 	printf("[seq_uri=%s] [genereated_uri=%s]\n", seq_uri, client.uri);
 
 	char *seq2_uri = "/path/to/video/-1209500Seg2-Frag3";

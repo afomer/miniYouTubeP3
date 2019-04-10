@@ -323,7 +323,8 @@ int get_main_headers(client *client, response *respond_buffer, char *status_line
  * connection type
  */
 int send_response_helper(client *client, response *respond_buffer) {
-        return send(client->clientfd, respond_buffer->buffer, respond_buffer->size, 0);
+	printf("\n\noutgoing port: %d\n\n", client->outgoing_port);
+        return send(client->outgoing_port, respond_buffer->buffer, respond_buffer->size, 0);
 
 }
 
@@ -494,44 +495,47 @@ char *DNS_resolve(char *host) {
 int set_request_line(client *client, char *string, char *new_request_line) {
         char string_method_name[50];
         char string_uri[MAX_LINE];
-        char number1[2];
-        char number2[2];
+        //int number1;
+        //int number2;
         char *begin;
         char *end;
 
-        sscanf(string, "%s %s HTTP/%1s.%1s\r\n", string_method_name, string_uri, number1, number2);
-        
+        sscanf(string, "%s %s HTTP/1.1", string_method_name, string_uri);
+	sprintf(new_request_line, "%s %s HTTP/1.1\r\n", string_method_name, string_uri);
+	
+	printf("\n\n%s\n\n", new_request_line);
+	// Host: 4.0.0.1:8002\r\n\r\n
         // TODO: for CP2, Perform DNS resolution on the host
         // for checkpoint hardcode known servers
 
         // normalize the uri be lowercasing it
-        to_lower_case(string_uri);
+        //to_lower_case(string_uri);
 
-        //format #1: http://host.com/...
-        begin = strstr(string_uri, "//");
+        //format #1: /path...
+        begin = strchr(string_uri, '/');
 
         if (begin == NULL) {
         	return -1;
         }
-        begin = begin + 2; // start the host
+        //begin = begin + 2; // start the host
 
         end   = strrchr(begin, '/');
 
-        if (end == NULL) {
+        if (end == NULL || begin == end) {
         	return -1;
         }
 
         /* get the main host name based on the format of the URI */
         char uri_buff[MAX_LINE];
-		char *port_ptr = strchr(begin, ':');
+	char *port_ptr = strchr(begin, ':');
         int str_len;
         
-        // format #1: http://....:port/...
+        // format #1: /....:port/...
         if ( port_ptr != NULL && port_ptr < end ) {
-        	str_len = port_ptr - begin;
+        	str_len = port_ptr - begin - 1;
         }
         else {
-        // format #2: http://..../...
+        // format #2: /..../...
         	str_len = end - begin;
         }
 		
@@ -546,12 +550,12 @@ int set_request_line(client *client, char *string, char *new_request_line) {
 		// keep the rest the same
 		char *new_host = DNS_resolve(uri_buff);
 		char *path = end;
-		sprintf(client->uri, "http://%s%s", new_host, path);
-        sprintf(new_request_line, "%s %s HTTP/%1s.%1s\r\n", string_method_name, client->uri, number1, number2);
+		sprintf(client->uri, "%s%s", new_host, path);
+        sprintf(new_request_line, "%s %s HTTP/1.1\r\n", string_method_name, client->uri);
+	printf("\n---\n%s\n---\n", new_request_line);
         handle_path(client, new_request_line);
-
         // set the new uri
-        sprintf(new_request_line, "%s %s HTTP/%1s.%1s\r\n", string_method_name, client->uri, number1, number2);
+        sprintf(new_request_line, "%s %s HTTP/1.1\r\n", string_method_name, client->uri);
         return 1;
 }
 
@@ -818,6 +822,9 @@ void set_bit_rate(client *client, int bitrate_value) {
 			found_bitrate_field = 1;
 		}
 	}
+
+	printf("bitrate = %d - %d\n", bitrate_value, found_bitrate_field);
+
 }
 
 void get_bit_rates(client *client, char *buf) {
@@ -825,13 +832,17 @@ void get_bit_rates(client *client, char *buf) {
 	// the bitrate array
 	char *bitrate_begin = strstr(buf, "bitrate");
 	char *bitrate_end 	= NULL;
+	//int i;
 	while( bitrate_begin != NULL ) {
 			bitrate_begin = bitrate_begin + strlen("bitrate") + strlen("=\"");
 			bitrate_end   = strchr(bitrate_begin, '"');
 			int bitrate_value = atoi(bitrate_begin);
 			set_bit_rate(client, bitrate_value);
 			bitrate_begin = strstr(bitrate_end, "bitrate");
+	//	i++;	
 	}
+
+//	printf("iters for get_bit_rates: %d\n", i);
 }
 /*
 * get_best_bitrate: 
@@ -839,7 +850,7 @@ void get_bit_rates(client *client, char *buf) {
 */
 int get_best_bitrate(client *client) {
 	int supported_throughput = client->t_curr;
-	int best_bitrate = client->bitrates[0];
+	int best_bitrate = 100;//client->bitrates[0];
 	int i;
 	for (i = 0; i < BITRATES_NUM; i++){
 		// 2.5 * bitrate = bitrate 1.5x
@@ -858,14 +869,14 @@ int get_best_bitrate(client *client) {
  */
 void handle_path(client *client, char *new_request_line) {
 
-	// store timestamp for bitrate adaptation
-	client->timestamp = (int)time(NULL);
+	printf("\nhandle_path: %s\n", client->uri);
 
 	char *extn = strrchr(client->uri, '.');
-	if (extn != NULL && strcmp(extn, ".f4m") == 0) {
+	if (extn != NULL && extn[1] == 'f' &&  extn[2] == '4' && extn[3] == 'm' && extn[4] == ' ') {
 		// Perform the current request and store the bitrates
 		// then modify the uri path so it requests "_nolist.f4m"
 		static response respond_buffer;
+		strcat(new_request_line, "\r\n");
 		respond_buffer.size   = strlen(new_request_line);
 		respond_buffer.buffer = new_request_line;
 		send_response_helper(client, &respond_buffer);
@@ -877,8 +888,10 @@ void handle_path(client *client, char *new_request_line) {
 		int bytes_to_be_read = BUF_SIZE;
 		int readret = 1;
 		while(readret > 0) {
+			printf("readret path: %d", readret);
 			readret = recv(client->clientfd, buf + seek, bytes_to_be_read, 0);
 			seek += readret;
+		printf("recv");
 		}
 		
 		get_bit_rates(client, buf);
@@ -891,8 +904,9 @@ void handle_path(client *client, char *new_request_line) {
 
 	// for the case that you're modifying segment request
 	// get the best bitrate and modify the uri
+	printf("rqst uri: %s", client->uri);
 	char *path = strrchr(client->uri, '/');
-	char *sub_path = strstr(client->uri, "seg"); //TODO: make sure it's lower case
+	char *sub_path = strstr(client->uri, "Seg"); //TODO: make sure it's lower case
 	if (path != NULL && sub_path != NULL) {
 		// Perform the current request and store the bitrates
 		// then modify the uri path so it requests "_nolist.f4m"
@@ -905,8 +919,14 @@ void handle_path(client *client, char *new_request_line) {
 		memcpy(new_uri, client->uri, path1_len);
 		client->uri[0] = 0;
 		sprintf(client->uri, "%s/%d%s", new_uri, best_supported_bitrate, new_sub_path);
+
+	// store timestamp for bitrate adaptation
+
+	client->timestamp = (int)time(NULL);
+	printf("\nstore time %d \n", client->timestamp);	
 	}
 
+	printf("uri:%s\n", client->uri);
 	return;
 }
 
@@ -948,9 +968,11 @@ int handle_request_header(client *client, int readret, char *www_folder_path, ch
         //char *request_end = &(tmp_requst_buffer[readret - 1]);
         char *begin = tmp_requst_buffer;
         char *end = strstr(tmp_requst_buffer, CRLF);
-		char new_request_line[MAX_LINE];
+	char new_request_line[MAX_LINE];
+	char new_line[MAX_LINE];
 
         // point to lines by beginning and ending pointers
+	FILE *fp2 = fopen("./parsend.txt", "w");
         while (end != NULL) {
  		    // if a request_line is encountered
     		// perform resolution on the uri
@@ -958,25 +980,41 @@ int handle_request_header(client *client, int readret, char *www_folder_path, ch
     		// for other requests foward without modification
     		memcpy(line, begin, (end + 2) - begin);
     		line[(end + 2) - begin] = '\0';
-
+	    printf("line: %s\n", line);
             if ( is_request_line(line) ) {
                     set_request_line(client, line, new_request_line);
                     // send the new request line
+//printf("\n%d %d", line[strlen(line)-1], line[strlen(line)-2]);
                     response.size = strlen(new_request_line);
                     response.buffer = new_request_line;
-                    send_response_helper(client, &response);
-            }
+		fwrite(response.buffer, 1, response.size, fp2);                    
+	send_response_helper(client, &response);
+
+	//printf("\n\n%d %s %s %d\n\n", response.size, response.buffer, new_request_line,x);
+}
             else {
 	            // send to ther user
+		//printf("%d", (int)strlen(line));
+		//char *endr = strrchr(line,'\n');
+		//*endr = '\0';
+		printf("\n%d %d", line[strlen(line)-1], line[strlen(line)-2]);
+		sprintf(new_line, "%s", line);
                 response.size = strlen(line);
                 response.buffer = line;
-                send_response_helper(client, &response);    	
-            }
+		fwrite(response.buffer, 1, response.size, fp2);
+                send_response_helper(client, &response);
+		//printf("\n\n%d %s %d\n\n", response.size, response.buffer,y);            
+}
 
         	begin = end + 2;
         	end = strstr(begin, CRLF);
         }
 
+fclose(fp2);
+//char buf3[10000];
+//printf("listen\n");
+//int b3 = recv(client->outgoing_port, buf3, 10000,0);
+//printf("fin\n%d - %s\n", b3, buf3);
 
         // Read headers line by line
         /*

@@ -36,6 +36,7 @@
 char *LOG_FILE;
 char *FAKE_IP;
 float ALPHA;
+char *optional_www_folder_path;
 
 /****/
 
@@ -61,7 +62,7 @@ void check_clients(pool * p, char * optional_www_folder_path, char * log_file);
 void remove_client(pool * p, int i);
 int daemonize(char * lock_file);
 void signal_handler(int sig);
-
+int create_socket_and_bind(struct sockaddr_in addr);
 /****/
 
 /**
@@ -129,6 +130,7 @@ int daemonize(char * lock_file) {
  * and reset his/her struct's entries
  */
 void remove_client(pool * p, int i) {
+printf("try to remove i=%d", i);
 
         FD_CLR(p->clients[i].clientfd, &p->read_set);
 
@@ -171,22 +173,41 @@ void check_clients(pool * p, char * optional_www_folder_path, char * log_file) {
 
                         // if it's a web_server, echo the result to the target client
                         if ( client.is_web_server ) {
-	                        	readret = recv(client.clientfd, buf, BUF_SIZE, 0);
-
-	                        	if (readret == 0 || (client.sent_empty_line && client.clientfd > 0)) {
+//printf("got sutff from webserver");
+	                        	readret = recv(client.outgoing_port, buf, BUF_SIZE, 0);
+//printf("\nreadret server: %d, buf: %s, is_web_server: %d\n", readret, buf, client.is_web_server);
+	                        	if (readret == 0) {
 		                        		// EOF detected break the connection
-		                        	//	remove_client(p, i);
+		                        		remove_client(p, i);
 
 		                        }
 		                        else {
+
+		                        		float t_curr = client.t_curr;
+
+// get the timestamp from the client
+int client_i;
+for(client_i = 0; client_i < FD_SETSIZE; client_i++) {
+	if (p->clients[client_i].clientfd > 0) {
+	printf("fd %d - timetstmap %d\n", p->clients[client_i].clientfd, p->clients[client_i].timestamp);
+}
+	if (p->clients[client_i].clientfd == client.serving_clientfd) {
+		t_curr = p->clients[client_i].timestamp;
+		printf("\nfound old timestamp. fd: %d - timestamp: %d \n", 		   p->clients[client_i].clientfd, p->clients[client_i].timestamp);
+	}
+}
 		                        		// apply bitrate adaptation
 		                        		int new_timestamp = (int)time(NULL);
-		                        		int t_new  = readret/(new_timestamp - (client.timestamp));
-		                        		int t_curr = client.t_curr;
+int time_diff = new_timestamp == client.timestamp ? 1 : (new_timestamp - client.timestamp);
+		                        		float t_new  = ((float)readret)/((float)time_diff);
+
 
 		                        		client.t_curr = ALPHA*t_new +(1 - ALPHA)*t_curr;
 
-	                        			send(client.serving_clientfd, buf, readret, 0);	
+printf("fd: %d - curr: %f - readret: %d - [diff: %d] time new: %d - time old: %d\n", client.clientfd, client.t_curr, readret, new_timestamp - (client.timestamp), new_timestamp, (client.timestamp));
+
+	                        			send(client.serving_clientfd, buf, readret, 0);
+	
                         		}
                         }
                         else {
@@ -208,7 +229,7 @@ void check_clients(pool * p, char * optional_www_folder_path, char * log_file) {
 
 		                        // incase of EOF, close the connection
 		                        if (readret < 0) {
-		                              //  remove_client(p, i);
+		                              remove_client(p, i);
 		                                continue;
 		                        }
 
@@ -224,6 +245,23 @@ void check_clients(pool * p, char * optional_www_folder_path, char * log_file) {
 
 		                        //int close_socket_after_response = 0 close_socket_after_response =
 		                        handle_request_header(&client, readret, optional_www_folder_path, LOG_FILE);
+
+	if (client.timestamp > 0){
+		printf("\nstore time %d \n", client.timestamp);
+	
+int client_i;
+for(client_i = 0; client_i < FD_SETSIZE; client_i++) {
+//	if (p->clients[client_i].clientfd > 0) {
+//	printf("fd %d - timetstmap %d\n", p->clients[client_i].clientfd, p-//>clients[client_i].timestamp);
+//}
+	// set timestamp
+	if (p->clients[client_i].serving_clientfd == client.clientfd) {
+		p->clients[client_i].timestamp = client.timestamp;
+		printf("\nfound old timestamp. fd: %d - timestamp: %d \n", 		   p->clients[client_i].clientfd, p->clients[client_i].timestamp);
+	}
+}	
+}
+
 		                     //logger(LOG_FILE, "\n request_buffer after handle_request_header:%s\n", client.request_buffer, SHOW_LOG);
 
 		                        // After serving the client, decide whether to close the connection or not.
@@ -313,7 +351,7 @@ void add_client(int connfd, pool * p, char * log_file) {
 		// 0 tells the OS to pick the port for us
 		outgoing_addr.sin_port = htons(0);
 		outgoing_addr.sin_addr.s_addr = inet_addr(FAKE_IP);
-		outgoing_sock = create_listening_socket(outgoing_addr);
+		outgoing_sock = create_socket_and_bind(outgoing_addr);
 		getsockname(outgoing_sock, (struct sockaddr*)&actual_addr, &actual_addr_size);
 
         for (i = 0; i < FD_SETSIZE; i++) {
@@ -322,8 +360,9 @@ void add_client(int connfd, pool * p, char * log_file) {
 
                 // Check for open slot for the new connection
                 if (p->clients[i].clientfd < 0) {
+	client->outgoing_port = outgoing_sock;
 						
-						server_client->outgoing_port = ntohs(actual_addr.sin_port);
+						server_client->outgoing_port = outgoing_sock;
 						server_client->serving_clientfd = connfd;
 						server_client->is_web_server = 1;
                         
@@ -348,7 +387,7 @@ void add_client(int connfd, pool * p, char * log_file) {
 
                         // add connfd and sock to web server to the active clients' descriptors
                         FD_SET(server_client->outgoing_port, &p->read_set);
-
+			printf("WEB SOCK: %d", ntohs(actual_addr.sin_port));
                         // update the max index of the fdset
                         if (outgoing_sock > p->maxfd) {
                                 p->maxfd = outgoing_sock;
@@ -359,6 +398,16 @@ void add_client(int connfd, pool * p, char * log_file) {
                         break;
                 }
         }
+
+
+//char *str2 = "GET / HTTP/1.1\r\nHost: 5.0.0.1:8002\r\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:25.0) Gecko/20100101 Firefox/25.0\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip, deflate\r\nConnection: keep-alive\r\n\r\n";
+//send(outgoing_sock,str2,strlen(str2),0);
+
+//	char buf2[10000];
+//	int len = recv(outgoing_sock, buf2, 1000, 0);
+	
+//printf("%d - %s", len, buf2);
+
 
         // if looped all the array & didn't find empty slot
         //TODO: review condition logic
@@ -419,6 +468,18 @@ int create_socket_and_bind(struct sockaddr_in addr) {
                 fprintf(stderr, "Failed binding socket.\nShutting the server down");
                 exit(EXIT_FAILURE);
         }
+	
+struct sockaddr_in addr2;
+addr2.sin_family = AF_INET;
+addr2.sin_addr.s_addr = inet_addr(optional_www_folder_path);
+	addr2.sin_port = htons(8080);
+	struct sockaddr_in actual_addr;
+	socklen_t actual_addr_size = sizeof(actual_addr);	
+	getsockname(sock, (struct sockaddr*)&actual_addr, &actual_addr_size);
+	
+	int y = connect(sock, (struct sockaddr *)&addr2, sizeof(addr2));
+	
+printf("%s connect: %d, sock:%d - %d\n\n", optional_www_folder_path ,y, sock, ntohs(actual_addr.sin_port) );
 
         return sock;
 }
@@ -464,11 +525,10 @@ int run_server(int argc, char *argv[]) {
         int dns_port;
         char *log_file;
         char *dns_ip;
-        char *optional_www_folder_path;
+        //char *optional_www_folder_path;
         socklen_t cli_size;
         struct sockaddr_in addr, cli_addr;
         static pool pool;
-        int is_secure_connection;
         int port_len = 10;
         char listen_port_buff[port_len];
         char dns_port_buff[port_len];
@@ -484,7 +544,7 @@ int run_server(int argc, char *argv[]) {
 
         LOG_FILE = argv[1]; // set a global variable for the log_file
         log_file = LOG_FILE;
-        ALPHA = atoi(argv[2]); // for smooth averaging
+        sscanf(argv[2], "%f", &ALPHA); // for smooth averaging
         listen_port = atoi(argv[3]); // listening for the browser
         FAKE_IP  = argv[4]; // binding for connecting with Web Server
         dns_ip   = argv[5]; // DNS server IP
@@ -492,7 +552,7 @@ int run_server(int argc, char *argv[]) {
         optional_www_folder_path = argv[7]; // if unavialable DNS resolve to video.cs.cmu.edu
         get_str_from_int(listen_port, listen_port_buff);
         get_str_from_int(dns_port, dns_port_buff);
-
+	printf("dns: %s %d", dns_ip, dns_port);
         // log the provided args
        // print_args(argv, argc);
 
@@ -517,11 +577,11 @@ int run_server(int argc, char *argv[]) {
 
                 pool.ready_set = pool.read_set;
                //logger(LOG_FILE, "%s", "Blocking Select()...\n", SHOW_LOG);
-
+//printf("blocking\n");
                 // wait for an event ( unread bytes, new connections )
                 pool.nready = select(pool.maxfd + 1, &pool.ready_set, NULL, NULL, NULL);
                //logger(LOG_FILE, "%s", "check & add clients\n", SHOW_LOG);
-
+//printf("go rqst\n");
                 /*** Check for connection requests & add corresponding clients ***/
                 /* Checking HTTP connections */
                 if (FD_ISSET(sock, &pool.ready_set)) {
@@ -535,9 +595,10 @@ int run_server(int argc, char *argv[]) {
                                 return EXIT_FAILURE;
                         }
                      //logger(LOG_FILE, "%s", "new Client\n----\n", SHOW_LOG);
-                        is_secure_connection = 0;
+                        //is_secure_connection = 0;
 
                         // Add to active client pool
+			printf("new client!\n");
                         add_client(client_sock, &pool, log_file);
 
                 }

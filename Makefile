@@ -3,8 +3,7 @@
 #                                                                              #
 # Description: This file contains the make rules for Recitation 1.             #
 #                                                                              #
-# Authors: Athula Balachandran <abalacha@cs.cmu.edu>,                          #
-#          Wolf Richter <wolf@cs.cmu.edu>                                      #
+# Authors: Abuabker Omer <afomer@cmu.edu>    			                       #
 #                                                                              #
 ################################################################################
 CC = gcc

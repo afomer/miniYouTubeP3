@@ -441,7 +441,7 @@ server_list_s *create_server_list() {
 	return server_list;
 }
 
-void print_list(server_list_s *servers) {
+node_s *print_list(server_list_s *servers) {
 	
 	node_s *tmp_ptr = servers->head;
 	
@@ -455,6 +455,7 @@ void print_list(server_list_s *servers) {
 		tmp_ptr = tmp_ptr->next;
 	}
 	printf("----\n");
+	return NULL;
 
 }
 
@@ -480,6 +481,7 @@ node_s *deqeue_server(server_list_s *servers) {
 	}
 	else if (servers->head->next == NULL) {
 		node_s *tmp_ptr = servers->head;
+		servers->node_num = servers->node_num - 1;
 		servers->head = NULL;
 		return tmp_ptr;
 	}
@@ -491,7 +493,8 @@ node_s *deqeue_server(server_list_s *servers) {
 		prev_ptr = tmp_ptr;
 		tmp_ptr = tmp_ptr->next;
 	}
-
+	
+	servers->node_num = servers->node_num - 1;
 	prev_ptr->next = NULL;
 	return tmp_ptr;
 }
@@ -575,18 +578,21 @@ char *get_best_server_round_robin(server_list_s *servers) {
 
 node_s *is_in_server_list(char *source_ip, server_list_s *servers) {
 	node_s *tmp_ptr;
-
+	print_list(servers);
 	for (tmp_ptr = servers->head; tmp_ptr; tmp_ptr = tmp_ptr->next) {
+		printf("ip = %s\n", tmp_ptr->ip);
 		if ( strcmp(tmp_ptr->ip, source_ip) == 0 ) {
 			return tmp_ptr;
 		}
 	}
+	printf("SHOOT\n");
 	return NULL;
 }
+
 /*
 	handle_LSAs: and populate server_list
 */
-void handle_LSAs(char *LSAs_file) {
+server_list_s *handle_LSAs(char *LSAs_file) {
 
   // Read the file line by line
   char *line = NULL;
@@ -633,12 +639,11 @@ void handle_LSAs(char *LSAs_file) {
 
 	printf("\nLSA Sources (%d)\n", servers->node_num);
 	print_list(servers);
-
-
 	fclose(fp);
+	return servers;
 }
 
-char *get_best_server_dijkstra(char *source_ip, server_list_s servers) {
+char *get_best_server_dijkstra(char *source_ip, server_list_s *servers) {
 
 	// since, all links are weighted at 1 BFS == Dijkstra
 	// distance to all others as INFINITY
@@ -657,23 +662,39 @@ char *get_best_server_dijkstra(char *source_ip, server_list_s servers) {
 		node_s *node = deqeue_server(queue);
 
 		// if reached any server (non-router then return it)
-		if ( node != NULL && strstr(node->ip, "router") != NULL ) {
+		if ( node != NULL && strstr(node->ip, source_ip) == NULL && strstr(node->ip, "router") == NULL ) {
+			printf("Best server: %s\n", node->ip);
 			return node->ip;
 		}
 
 		// for all neighbours of u
+		printf("original node ip: %s\n", node->ip);
+		node_s *found_node = is_in_server_list(node->ip, servers);
 		node_s *neighbour;
-		for (neighbour = node->neighbours != NULL ? node->neighbours->head : NULL; neighbour; neighbour = neighbour->next) {
+
+		printf("----\nnode ip: %s\n", found_node ? found_node->ip : "NO Entry");
+
+		for (neighbour = found_node && found_node->neighbours ? found_node->neighbours->head : NULL; neighbour; neighbour = neighbour->next) {
 			// if N(s) is not visisted
-			if ( is_in_server_list(neighbour->ip, visited_vertices) != NULL ) {
+			printf("is_in_server_list \n\n");
+			node_s *x = queue->head != NULL ? print_list(queue) : NULL;
+			
+			if ( is_in_server_list(neighbour->ip, visited_vertices) == NULL ) {
 				// label it as visited then add it to visited nodes
+				printf("addd to visited nodes\n");
+			//	printf("neighbour: %s (%d, %d) \n", neighbour->ip, queue == NULL, visited_vertices == NULL);
 				set_server(visited_vertices, neighbour->ip);
+				printf("add to queue\n");
 				set_server(queue, neighbour->ip);
+			}
+			else {
+				printf("visited already\n");
 			}
 		}
 
 	}
 
+	exit(0);
 	return NULL;
 
 }
@@ -695,7 +716,10 @@ int main(int argc, char **argv)
     	exit(-1);
   	}
 
-  	handle_LSAs(argv[1]);
+  	server_list_s *servers_by_LSAs= handle_LSAs(argv[1]);
+
+  	get_best_server_dijkstra("1.0.0.1", servers_by_LSAs);
+
   	exit(0);
 
 	// sendto listening socket, read the data

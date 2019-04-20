@@ -417,35 +417,59 @@ typedef struct server_list server_list_s;
 typedef struct node node_s;
 
 struct node {
+	int seq_num;
 	char ip[128];
 	server_list_s *neighbours;
-	int seq_num;
 	struct node *next;
 };
 
 struct server_list {
 	struct node *head;
+	struct node *tail;
 	struct node *curr;
+	int node_num;
 };
 
 
 server_list_s *create_server_list() {
-	 server_list_s *server_list = malloc(sizeof(server_list_s));
-	 server_list->head = NULL;
-	 server_list->curr = server_list->head;
-	 return server_list;
+	server_list_s *server_list = malloc(sizeof(struct server_list));
+	server_list->curr = NULL;
+	server_list->node_num = 0;
+	server_list->head = NULL;
+	server_list->tail = NULL;
+
+	return server_list;
+}
+
+void print_list(server_list_s *servers) {
+	
+	node_s *tmp_ptr = servers->head;
+	
+	int node_i = 0;
+	int nodes_max = servers->node_num;
+	printf("----(%d)\n", nodes_max);
+
+	while (tmp_ptr != NULL) {
+		node_i  = node_i + 1;
+		printf("ip: %s - seq_num: %d\n", tmp_ptr->ip, tmp_ptr->seq_num);
+		tmp_ptr = tmp_ptr->next;
+	}
+	printf("----\n");
+
 }
 
 node_s *set_server(server_list_s *server_list, char *new_server_ip) {
 	// TODO: make sure there are no duplicates
 	// else add it
-	node_s *node = malloc(sizeof(node));
+	
+	node_s *node = malloc(sizeof(struct node));
 	strcpy(node->ip, new_server_ip);
 	node->next = server_list->head;
-	node->seq_num = 0;
 	node->neighbours = NULL;
+	node->seq_num = 0;
 	server_list->head = node;
-	printf("ADDED\n");
+	server_list->node_num = server_list->node_num + 1;
+
 	return node;
 }
 
@@ -472,6 +496,64 @@ node_s *deqeue_server(server_list_s *servers) {
 	return tmp_ptr;
 }
 
+node_s *get_server_by_ip(char *source_ip, server_list_s *servers) {
+	node_s *tmp_ptr;
+
+	for (tmp_ptr = servers->head; tmp_ptr != NULL; tmp_ptr = tmp_ptr->next) {
+		if ( strcmp(tmp_ptr->ip, source_ip) == 0 ) {
+			return tmp_ptr;
+		}
+	}
+
+	return NULL;
+}
+
+server_list_s *get_neighbours_from_str(char *list) {
+	
+	server_list_s *neighbours = create_server_list();
+
+	//printf("list: %s - head: %d\n", list, neighbours->head == NULL);
+
+	// if there is only one entry recognize it
+	if (strchr(list, ',') == NULL) {
+		set_server(neighbours, list);
+	}
+
+	char line[BUF_SIZE];
+	char *begin = list;
+	char *end = strchr(list, ',');
+
+	// point to lines by beginning and ending pointers
+	while (end != NULL) {
+		// if a request_line is encountered
+		// perform resolution on the uri
+		// then forward the request to the webserver
+		// for other requests foward without modification
+		strncpy(line, begin, (int)(end - begin) );
+		set_server(neighbours, line);
+		begin = end + 1;
+		end = strchr(begin, ',');
+	}
+
+	// take care of the last entry in multi-neighbour case
+	begin = strrchr(list, ',');
+	end = strrchr(list, '\0');
+
+	if ( begin != NULL && end != NULL) {
+		// if a request_line is encountered
+		// perform resolution on the uri
+		// then forward the request to the webserver
+		// for other requests foward without modification
+		memcpy(line, begin + 1, end - begin);
+		line[end - begin] = '\0';
+
+		//printf("line: %s\n", line);
+		set_server(neighbours, line);
+	}
+
+	return neighbours;
+}
+
 /*
 * get_best_server_round_robin: servers is a linked list, in which the head is
 * refered to when the end of the list is reached
@@ -491,17 +573,69 @@ char *get_best_server_round_robin(server_list_s *servers) {
 	return ip;
 }
 
-int is_in_server_list(char *source_ip, server_list_s *servers) {
+node_s *is_in_server_list(char *source_ip, server_list_s *servers) {
 	node_s *tmp_ptr;
-	printf("\n\n%s\n", source_ip);
+
 	for (tmp_ptr = servers->head; tmp_ptr; tmp_ptr = tmp_ptr->next) {
-		printf("INSIDE is_in_server_list %s\n", tmp_ptr->ip);
 		if ( strcmp(tmp_ptr->ip, source_ip) == 0 ) {
-			return 1;
+			return tmp_ptr;
 		}
 	}
-	printf("Finished INSIDE is_in_server_list\n");
-	return 0;
+	return NULL;
+}
+/*
+	handle_LSAs: and populate server_list
+*/
+void handle_LSAs(char *LSAs_file) {
+
+  // Read the file line by line
+  char *line = NULL;
+  char sender_ip[BUF_SIZE];
+  char neighbours[BUF_SIZE];
+  size_t len = 0;
+  int seq_num;
+
+  FILE *fp = fopen(LSAs_file, "r");
+
+  if (fp == NULL) {
+  	printf("Problem with LSAs file\n");
+  	exit(0);
+  }
+
+  // all IPs/routes seen
+  server_list_s *servers = create_server_list();
+  node_s *found_server;
+  node_s *new_server;
+  
+  // getline will allocate a space for the lines that should be freed
+  // (that happens because line is NULL and len is 0)
+	while (getline(&line, &len, fp) != -1) {
+		sscanf(line, "%s %d %s", sender_ip, &seq_num, neighbours);
+		//printf("line: %s %d %s\n", sender_ip, seq_num, neighbours);
+		
+		found_server = is_in_server_list(sender_ip, servers);
+		if ( found_server != NULL) {
+			if ( seq_num > found_server->seq_num ) {
+				found_server->seq_num = seq_num;
+				found_server->neighbours = get_neighbours_from_str(neighbours);
+				// TODO: free old neighbours
+			}
+		}
+		else {
+			new_server = set_server(servers, sender_ip);
+			new_server->seq_num = seq_num;			
+			new_server->neighbours = get_neighbours_from_str(neighbours);
+		}
+
+		// print
+		//printf("get neighbours\n");
+	}
+
+	printf("\nLSA Sources (%d)\n", servers->node_num);
+	print_list(servers);
+
+
+	fclose(fp);
 }
 
 char *get_best_server_dijkstra(char *source_ip, server_list_s servers) {
@@ -531,7 +665,7 @@ char *get_best_server_dijkstra(char *source_ip, server_list_s servers) {
 		node_s *neighbour;
 		for (neighbour = node->neighbours != NULL ? node->neighbours->head : NULL; neighbour; neighbour = neighbour->next) {
 			// if N(s) is not visisted
-			if ( !is_in_server_list(neighbour->ip, visited_vertices) ) {
+			if ( is_in_server_list(neighbour->ip, visited_vertices) != NULL ) {
 				// label it as visited then add it to visited nodes
 				set_server(visited_vertices, neighbour->ip);
 				set_server(queue, neighbour->ip);
@@ -544,151 +678,8 @@ char *get_best_server_dijkstra(char *source_ip, server_list_s servers) {
 
 }
 
-node_s *get_server_by_ip(char *source_ip, server_list_s *servers) {
-	node_s *tmp_ptr;
 
-	for (tmp_ptr = servers->head; tmp_ptr; tmp_ptr = tmp_ptr->next) {
-		if ( strcmp(tmp_ptr->ip, source_ip) == 0 ) {
-			return tmp_ptr;
-		}
-	}
-
-	return NULL;
-}
-
-server_list_s *get_neighbours_from_str(char *list) {
-	
-	server_list_s *neighbours = create_server_list();
-
-	printf("head: %d\n", neighbours->head == NULL);
-
-	char line[9096];
-	char *begin = list;
-	char *end = strchr(list, ',');
-
-	// point to lines by beginning and ending pointers
-	while (end != NULL) {
-		// if a request_line is encountered
-		// perform resolution on the uri
-		// then forward the request to the webserver
-		// for other requests foward without modification
-		strncpy(line, begin, (int)(end - begin) );
-
-		printf("line: %s - %d", line, (int)(end-begin));
-		node_s *tmp_ptr;
-		int i = 0;
-		printf("\n\nBefore- Neighbours:\n");
-
-		for (tmp_ptr = neighbours->head; tmp_ptr != NULL; tmp_ptr = tmp_ptr->next) {
-			printf("%s %d\n", tmp_ptr->ip, tmp_ptr->seq_num);
-			i++;
-		}
-
-		set_server(neighbours, "127.0.1.1");
-		set_server(neighbours, "12.0.1.1");
-		set_server(neighbours, "27.0.1.1");
-		set_server(neighbours, "9.0.1.1");
-		set_server(neighbours, "23.0.1.1");
-		set_server(neighbours, "7.0.1.1");
-		set_server(neighbours, "34.0.1.1");
-		set_server(neighbours, "07.0.1.1");
-
-		printf(".\n.\nWTF- Neighbours:\n");
-		i = 0;
-		for (tmp_ptr = neighbours->head; tmp_ptr != NULL; tmp_ptr = tmp_ptr->next) {
-			printf("%s %d\n", tmp_ptr->ip, tmp_ptr->seq_num);
-			i++;
-		}
-		fflush(stdout);
-		printf("%d nodes ------\n", i);
-		exit(0);
-
-		begin = end + 1;
-		end = strchr(begin, ',');
-	}
-
-	// take care of the last entry
-	begin = strrchr(list, ',');
-	end = strrchr(list, '\0');
-
-	if ( begin != NULL && end != NULL) {
-		// if a request_line is encountered
-		// perform resolution on the uri
-		// then forward the request to the webserver
-		// for other requests foward without modification
-		memcpy(line, begin + 1, end - begin);
-		line[end - begin] = '\0';
-
-		printf("line: %s\n", line);
-		set_server(neighbours, line);
-	}
-
-	printf("\n\nNeighbours:\n");
-	node_s *tmp_ptr;
-	for (tmp_ptr = neighbours->head; tmp_ptr; tmp_ptr = tmp_ptr->next) {
-		printf("%s %d\n", tmp_ptr->ip, tmp_ptr->seq_num);
-	}
-	printf("\n------\n");
-	exit(0);
-
-	return neighbours;
-}
-
-/*
-	handle_LSAs: and populate server_list
-*/
-void handle_LSAs(char *LSAs_file) {
-
-  // Read the file line by line
-  char *line = NULL;
-  char sender_ip[1500];
-  char neighbours[1500];
-  size_t len = 0;
-  int seq_num;
-
-  FILE *fp = fopen(LSAs_file, "r");
-
-  if (fp == NULL) {
-  	printf("Problem with LSAs file\n");
-  	exit(0);
-  }
-
-  server_list_s *servers = create_server_list();
-
-  // getline will allocate a space for the lines that should be freed
-  // (that happens because line is NULL and len is 0)
-	while (getline(&line, &len, fp) != -1) {
-		sscanf(line, "%s %d %s", sender_ip, &seq_num, neighbours);
-		
-		printf("sender_ip: %s\n", sender_ip);
-		if (is_in_server_list(sender_ip, servers)) {
-			printf("is_in_server_list: \n");
-			node_s *server = get_server_by_ip(sender_ip, servers);
-			if (server->seq_num < seq_num) {
-				server->seq_num = seq_num;
-				server->neighbours = get_neighbours_from_str(neighbours);
-			}
-		}
-		else {
-			printf("not is_in_server_list\n");
-			node_s *new_server = set_server(servers, sender_ip);
-			new_server->seq_num = seq_num;
-			new_server->neighbours = get_neighbours_from_str(neighbours);
-			printf("fin new neighbours\n");
-		}
-
-	}
-
-	node_s *tmp_ptr;
-	for (tmp_ptr = servers->head; tmp_ptr; tmp_ptr = tmp_ptr->next) {
-		printf("%s %d\n", tmp_ptr->ip, tmp_ptr->seq_num);
-	}
-
-	fclose(fp);
-	exit(0);
-}
-
-int main(int argc, char *argv[])
+int main(int argc, char **argv)
 {
 	/** Test DNS Messages **/
 	// TODO: if I don't have a domain name, say I don't have it
@@ -703,6 +694,10 @@ int main(int argc, char *argv[])
     	perror("could not create socket");
     	exit(-1);
   	}
+
+  	handle_LSAs(argv[1]);
+  	exit(0);
+
 	// sendto listening socket, read the data
 	struct sockaddr_in myaddr;
 	bzero(&myaddr, sizeof(myaddr));
@@ -716,10 +711,7 @@ int main(int argc, char *argv[])
 	// Make servers
 	server_list_s *servers = create_server_list();
 	
-	// before calling for dijkstra clean LSAs
-	//handle_LSAs(argv[1]);
-
-
+	// before calling for 
 	set_server(servers, "128.2.9.1");
 	set_server(servers, "2.9.1.8");
 	set_server(servers, "12.9.1.8");

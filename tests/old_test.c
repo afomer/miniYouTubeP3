@@ -578,14 +578,14 @@ char *get_best_server_round_robin(server_list_s *servers) {
 
 node_s *is_in_server_list(char *source_ip, server_list_s *servers) {
 	node_s *tmp_ptr;
-	print_list(servers);
+	//print_list(servers);
 	for (tmp_ptr = servers->head; tmp_ptr; tmp_ptr = tmp_ptr->next) {
-		printf("ip = %s\n", tmp_ptr->ip);
+	//	printf("ip = %s\n", tmp_ptr->ip);
 		if ( strcmp(tmp_ptr->ip, source_ip) == 0 ) {
 			return tmp_ptr;
 		}
 	}
-	printf("SHOOT\n");
+	//printf("SHOOT\n");
 	return NULL;
 }
 
@@ -643,7 +643,7 @@ server_list_s *handle_LSAs(char *LSAs_file) {
 	return servers;
 }
 
-char *get_best_server_dijkstra(char *source_ip, server_list_s *servers) {
+char *get_best_server_dijkstra(char *source_ip, server_list_s *providing_servers, server_list_s *servers_with_LSAs) {
 
 	// since, all links are weighted at 1 BFS == Dijkstra
 	// distance to all others as INFINITY
@@ -653,6 +653,7 @@ char *get_best_server_dijkstra(char *source_ip, server_list_s *servers) {
 	set_server(queue, source_ip);
 	set_server(visited_vertices, source_ip);
 
+	printf("Client SOURCE: %s\n", source_ip);
 	node_s *node = queue->head;
 	int remove_status = 1;
 
@@ -662,33 +663,34 @@ char *get_best_server_dijkstra(char *source_ip, server_list_s *servers) {
 		node_s *node = deqeue_server(queue);
 
 		// if reached any server (non-router then return it)
-		if ( node != NULL && strstr(node->ip, source_ip) == NULL && strstr(node->ip, "router") == NULL ) {
+		// TODO: node is a server (not DNS nor client)
+		if ( node != NULL && is_in_server_list(node->ip, providing_servers) != NULL && strstr(node->ip, source_ip) == NULL && strstr(node->ip, "router") == NULL ) {
 			printf("Best server: %s\n", node->ip);
 			return node->ip;
 		}
 
 		// for all neighbours of u
 		printf("original node ip: %s\n", node->ip);
-		node_s *found_node = is_in_server_list(node->ip, servers);
+		node_s *found_node = is_in_server_list(node->ip, servers_with_LSAs);
 		node_s *neighbour;
 
-		printf("----\nnode ip: %s\n", found_node ? found_node->ip : "NO Entry");
+		printf("----[%s] node ip: %s\n", node->ip, found_node ? found_node->ip : "NO Entry");
 
 		for (neighbour = found_node && found_node->neighbours ? found_node->neighbours->head : NULL; neighbour; neighbour = neighbour->next) {
 			// if N(s) is not visisted
-			printf("is_in_server_list \n\n");
-			node_s *x = queue->head != NULL ? print_list(queue) : NULL;
+			//printf("is_in_server_list \n\n");
+			//node_s *x = queue->head != NULL ? print_list(queue) : NULL;
 			
 			if ( is_in_server_list(neighbour->ip, visited_vertices) == NULL ) {
 				// label it as visited then add it to visited nodes
-				printf("addd to visited nodes\n");
+			//	printf("addd to visited nodes\n");
 			//	printf("neighbour: %s (%d, %d) \n", neighbour->ip, queue == NULL, visited_vertices == NULL);
 				set_server(visited_vertices, neighbour->ip);
-				printf("add to queue\n");
+				//printf("add to queue\n");
 				set_server(queue, neighbour->ip);
 			}
 			else {
-				printf("visited already\n");
+				//printf("visited already\n");
 			}
 		}
 
@@ -699,6 +701,39 @@ char *get_best_server_dijkstra(char *source_ip, server_list_s *servers) {
 
 }
 
+server_list_s *handle_servers(char *servers_file) {
+
+  // Read the file line by line
+  char *line = NULL;
+  char server_ip_buff[BUF_SIZE];
+  node_s *new_server;
+  size_t len = 0;
+
+  FILE *fp = fopen(servers_file, "r");
+  if (fp == NULL) {
+  	printf("Problem with Servers file\n");
+  	exit(0);
+  }
+
+  // all IPs/routes seen
+  server_list_s *servers = create_server_list();
+
+  // getline will allocate a space for the lines that should be freed
+  // (that happens because line is NULL and len is 0)
+	while (getline(&line, &len, fp) != -1) {
+		sscanf(line, "%s", server_ip_buff);
+		//printf("line: %s %d %s\n", server_ip_buff, seq_num, neighbours);
+				
+		new_server = set_server(servers, server_ip_buff);
+		new_server->seq_num = 0;			
+		new_server->neighbours = NULL;
+	}
+
+	printf("\nServers (%d)\n", servers->node_num);
+	print_list(servers);
+	fclose(fp);
+	return servers;
+}
 
 int main(int argc, char **argv)
 {
@@ -718,7 +753,9 @@ int main(int argc, char **argv)
 
   	server_list_s *servers_by_LSAs= handle_LSAs(argv[1]);
 
-  	get_best_server_dijkstra("1.0.0.1", servers_by_LSAs);
+  	server_list_s *providing_servers = handle_servers(argv[2]);
+
+  	get_best_server_dijkstra("1.0.0.1", providing_servers, servers_by_LSAs);
 
   	exit(0);
 
